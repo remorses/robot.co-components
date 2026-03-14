@@ -5,7 +5,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { router } from 'spiceflow/react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-import { soundEffects } from '../../src/utils/SoundEffects';
+import { soundEffects } from '../utils/SoundEffects';
 
 // ============================================================================
 // TYPES

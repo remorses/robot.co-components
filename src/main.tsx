@@ -1,7 +1,7 @@
 // Spiceflow app entry point for robot.co-components demo
-import '../app/globals.css'
+import './globals.css'
 import { Spiceflow } from 'spiceflow'
-import NodeGrid from '../app/nodegrid/page'
+import NodeGrid from './nodegrid/page'
 
 const app = new Spiceflow()
   .layout('/*', async ({ children }) => {
