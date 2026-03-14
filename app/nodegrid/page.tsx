@@ -3,8 +3,8 @@
 import './grid.css';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { motion, AnimatePresence, useAnimation } from 'framer-motion';
-import { Loader2, Check, CircleCheck, ChevronUp, ChevronDown, GripVertical, Sparkles } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+
 import { soundEffects } from '../../src/utils/SoundEffects';
 
 // ============================================================================
@@ -37,20 +37,9 @@ interface PhysicsConfig {
   dragShadowOpacity: number;
 }
 
-interface DummyJob {
-  id: string;
-  name: string;
-  status: 'completed' | 'processing';
-  size: string;
-  gradient: string;
-}
-
 // ============================================================================
 // CONSTANTS
 // ============================================================================
-
-const HEADER_HEIGHT = 48;
-const JOB_ROW_HEIGHT = 52;
 
 const DEFAULT_CONFIG: PhysicsConfig = {
   boundaryMargin: 8,
@@ -77,44 +66,6 @@ const DEFAULT_CONFIG: PhysicsConfig = {
   dragShadowBlur: 40,
   dragShadowSpread: -8,
   dragShadowOpacity: 0.55,
-};
-
-// Greyscale gradients for thumbnails
-const GRADIENTS = [
-  'linear-gradient(135deg, #3a3a3a 0%, #2a2a2a 100%)',
-  'linear-gradient(135deg, #4a4a4a 0%, #333333 100%)',
-  'linear-gradient(135deg, #383838 0%, #282828 100%)',
-  'linear-gradient(135deg, #454545 0%, #303030 100%)',
-  'linear-gradient(135deg, #404040 0%, #2d2d2d 100%)',
-  'linear-gradient(135deg, #3d3d3d 0%, #2b2b2b 100%)',
-  'linear-gradient(135deg, #484848 0%, #323232 100%)',
-  'linear-gradient(135deg, #3b3b3b 0%, #292929 100%)',
-  'linear-gradient(135deg, #434343 0%, #2e2e2e 100%)',
-  'linear-gradient(135deg, #3f3f3f 0%, #2c2c2c 100%)',
-];
-
-const DUMMY_NAMES = [
-  'cosmic-nebula',
-  'azure-crystal',
-  'midnight-bloom',
-  'solar-flare',
-  'ocean-depths',
-  'aurora-burst',
-  'velvet-storm',
-  'golden-hour',
-  'neon-dreams',
-  'frost-peak',
-];
-
-// Generate dummy jobs
-const generateDummyJobs = (count: number): DummyJob[] => {
-  return Array.from({ length: count }, (_, i) => ({
-    id: `job-${i}`,
-    name: DUMMY_NAMES[i % DUMMY_NAMES.length],
-    status: i < 2 ? 'processing' : 'completed',
-    size: `${(Math.random() * 50 + 1).toFixed(1)} MB`,
-    gradient: GRADIENTS[i % GRADIENTS.length],
-  }));
 };
 
 // ============================================================================
@@ -180,721 +131,7 @@ class PanelSoundEffects {
 const panelSounds = new PanelSoundEffects();
 
 // ============================================================================
-// PHYSICS PANEL COMPONENT
-// ============================================================================
-
-function PhysicsPanel({ config, jobs, onPositionChange, onSizeChange, onBounce }: { config: PhysicsConfig; jobs: DummyJob[]; onPositionChange?: (x: number, y: number) => void; onSizeChange?: (width: number, height: number) => void; onBounce?: (x: number, y: number, intensity: number) => void }) {
-  const [position, setPosition] = useState(() => ({
-    x: typeof window !== 'undefined' ? window.innerWidth / 2 - config.panelWidth / 2 : 400,
-    y: typeof window !== 'undefined' ? window.innerHeight / 2 - HEADER_HEIGHT / 2 : 300,
-  }));
-
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-
-  const panelRef = useRef<HTMLDivElement>(null);
-  const innerPanelRef = useRef<HTMLDivElement>(null);
-  const animationFrameRef = useRef<number | null>(null);
-  const velocitySamplesRef = useRef<Array<{ x: number; y: number; t: number }>>([]);
-  const isAnimatingRef = useRef(false);
-  const justBouncedRef = useRef({ x: false, y: false });
-  const bounceControls = useAnimation();
-
-  // Track panel size changes with ResizeObserver
-  useEffect(() => {
-    const inner = innerPanelRef.current;
-    if (!inner) return;
-
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        onSizeChange?.(width, height);
-      }
-    });
-
-    observer.observe(inner);
-    return () => observer.disconnect();
-  }, [onSizeChange]);
-
-  // Visual feedback constants
-  const DRAG_TRANSITION = 'transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.15s cubic-bezier(0.4, 0, 0.2, 1)';
-
-  // Generate shadow strings from config
-  const IDLE_SHADOW = `0 ${config.idleShadowY}px ${config.idleShadowBlur}px ${config.idleShadowSpread}px rgba(0, 0, 0, ${config.idleShadowOpacity})`;
-  const DRAG_SHADOW = `0 ${config.dragShadowY}px ${config.dragShadowBlur}px ${config.dragShadowSpread}px rgba(0, 0, 0, ${config.dragShadowOpacity})`;
-
-  // Initialize sound on mount
-  useEffect(() => {
-    panelSounds.initialize();
-  }, []);
-
-  // Get viewport bounds
-  const getViewportBounds = useCallback((scale: number, panelWidth: number, panelHeight: number) => {
-    const effectiveWidth = window.innerWidth / scale;
-    const effectiveHeight = window.innerHeight / scale;
-    return {
-      minX: config.boundaryMargin,
-      maxX: effectiveWidth - panelWidth - config.boundaryMargin,
-      minY: config.boundaryMargin,
-      maxY: effectiveHeight - panelHeight - config.boundaryMargin,
-    };
-  }, [config.boundaryMargin]);
-
-  // Clamp velocity
-  const clampVelocity = useCallback((vx: number, vy: number) => {
-    const speed = Math.sqrt(vx * vx + vy * vy);
-    if (speed > config.maxVelocity) {
-      const ratio = config.maxVelocity / speed;
-      return { vx: vx * ratio, vy: vy * ratio };
-    }
-    return { vx, vy };
-  }, [config.maxVelocity]);
-
-  // Calculate velocity from samples
-  const calculateVelocityFromSamples = useCallback((): { x: number; y: number } => {
-    const samples = velocitySamplesRef.current;
-    if (samples.length < 2) return { x: 0, y: 0 };
-
-    const now = performance.now();
-    const maxAge = 80;
-
-    const lastSample = samples[samples.length - 1];
-    if (now - lastSample.t > maxAge) {
-      return { x: 0, y: 0 };
-    }
-
-    let totalWeight = 0;
-    let weightedVelX = 0;
-    let weightedVelY = 0;
-
-    for (let i = 1; i < samples.length; i++) {
-      const prev = samples[i - 1];
-      const curr = samples[i];
-      const dt = curr.t - prev.t;
-      const age = now - curr.t;
-
-      if (age <= maxAge && dt >= 8 && dt < 100) {
-        const weight = i / samples.length;
-        const velX = ((curr.x - prev.x) / dt) * 16.67;
-        const velY = ((curr.y - prev.y) / dt) * 16.67;
-        weightedVelX += velX * weight;
-        weightedVelY += velY * weight;
-        totalWeight += weight;
-      }
-    }
-
-    if (totalWeight === 0) return { x: 0, y: 0 };
-    return {
-      x: weightedVelX / totalWeight,
-      y: weightedVelY / totalWeight,
-    };
-  }, []);
-
-  // Animate momentum
-  const animateMomentum = useCallback((
-    startX: number,
-    startY: number,
-    velX: number,
-    velY: number,
-    scale: number,
-    panelWidth: number,
-    panelHeight: number
-  ) => {
-    const panel = panelRef.current;
-    if (!panel) return;
-
-    const clamped = clampVelocity(velX, velY);
-    let x = startX;
-    let y = startY;
-    let vx = clamped.vx;
-    let vy = clamped.vy;
-
-    isAnimatingRef.current = true;
-    justBouncedRef.current = { x: false, y: false };
-
-    const animate = () => {
-      const bounds = getViewportBounds(scale, panelWidth, panelHeight);
-
-      const speed = Math.sqrt(vx * vx + vy * vy);
-      const speedRatio = Math.min(speed / config.maxVelocity, 1);
-      const friction = config.baseFriction - (speedRatio * (config.baseFriction - config.highSpeedFriction));
-
-      const bounceMultiplierX = justBouncedRef.current.x ? config.bounceFrictionBoost : 1;
-      const bounceMultiplierY = justBouncedRef.current.y ? config.bounceFrictionBoost : 1;
-
-      vx *= friction * bounceMultiplierX;
-      vy *= friction * bounceMultiplierY;
-
-      justBouncedRef.current = { x: false, y: false };
-
-      x += vx;
-      y += vy;
-
-      let didBounce = false;
-      const preBounceSpeeed = Math.sqrt(vx * vx + vy * vy);
-
-      // Calculate normalized impact force (0-1) based on pre-bounce speed
-      const impactForce = Math.min(preBounceSpeeed / config.maxVelocity, 1);
-
-      if (x < bounds.minX) {
-        x = bounds.minX;
-        vx = Math.abs(vx) * config.bounceDamping;
-        justBouncedRef.current.x = true;
-        didBounce = true;
-        // Trigger pulse from left edge impact point
-        onBounce?.(x, y + panelHeight / 2, impactForce);
-      } else if (x > bounds.maxX) {
-        x = bounds.maxX;
-        vx = -Math.abs(vx) * config.bounceDamping;
-        justBouncedRef.current.x = true;
-        didBounce = true;
-        // Trigger pulse from right edge impact point
-        onBounce?.(x + panelWidth, y + panelHeight / 2, impactForce);
-      }
-
-      if (y < bounds.minY) {
-        y = bounds.minY;
-        vy = Math.abs(vy) * config.bounceDamping;
-        justBouncedRef.current.y = true;
-        didBounce = true;
-        // Trigger pulse from top edge impact point
-        onBounce?.(x + panelWidth / 2, y, impactForce);
-      } else if (y > bounds.maxY) {
-        y = bounds.maxY;
-        vy = -Math.abs(vy) * config.bounceDamping;
-        justBouncedRef.current.y = true;
-        didBounce = true;
-        // Trigger pulse from bottom edge impact point
-        onBounce?.(x + panelWidth / 2, y + panelHeight, impactForce);
-      }
-
-      // Play bounce sound
-      if (didBounce && preBounceSpeeed > 0.5 && config.soundEnabled) {
-        const normalizedSpeed = Math.min(preBounceSpeeed / config.maxVelocity, 1);
-        const impactVolume = config.soundMinVolume + (normalizedSpeed * normalizedSpeed) * (config.soundMaxVolume - config.soundMinVolume);
-        panelSounds.play(impactVolume);
-      }
-
-      panel.style.left = x + 'px';
-      panel.style.top = y + 'px';
-      onPositionChange?.(x, y);
-
-      const currentSpeed = Math.sqrt(vx * vx + vy * vy);
-      if (currentSpeed > config.minVelocity) {
-        animationFrameRef.current = requestAnimationFrame(animate);
-      } else {
-        isAnimatingRef.current = false;
-        animationFrameRef.current = null;
-        setPosition({ x, y });
-        onPositionChange?.(x, y);
-      }
-    };
-
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-    }
-
-    animationFrameRef.current = requestAnimationFrame(animate);
-  }, [config, clampVelocity, getViewportBounds]);
-
-  // Handle mouse down
-  const handleMouseDown = (e: React.MouseEvent) => {
-    const target = e.target as HTMLElement;
-    if (target.closest('[data-no-drag]')) return;
-
-    const panel = panelRef.current;
-    if (!panel) return;
-
-    const wasAnimating = animationFrameRef.current !== null;
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-      isAnimatingRef.current = false;
-    }
-
-    const innerPanel = panel.querySelector('[data-panel-inner]') as HTMLElement;
-    const rect = panel.getBoundingClientRect();
-    const scale = rect.width / config.panelWidth;
-
-    let startCssX: number;
-    let startCssY: number;
-    if (wasAnimating) {
-      startCssX = parseFloat(panel.style.left) || position.x;
-      startCssY = parseFloat(panel.style.top) || position.y;
-      setPosition({ x: startCssX, y: startCssY });
-    } else {
-      startCssX = position.x;
-      startCssY = position.y;
-    }
-
-    const grabOffsetX = e.clientX - rect.left;
-    const grabOffsetY = e.clientY - rect.top;
-    const startRectLeft = rect.left;
-    const startRectTop = rect.top;
-
-    let hasMoved = false;
-    let finalX = startCssX;
-    let finalY = startCssY;
-
-    velocitySamplesRef.current = [{ x: startCssX, y: startCssY, t: performance.now() }];
-
-    const applyDragStyle = () => {
-      if (innerPanel) {
-        innerPanel.style.transition = DRAG_TRANSITION;
-        innerPanel.style.transform = `scale(${config.dragScale})`;
-        innerPanel.style.boxShadow = DRAG_SHADOW;
-      }
-      panel.style.cursor = 'grabbing';
-      document.body.style.cursor = 'grabbing';
-    };
-
-    const removeDragStyle = () => {
-      if (innerPanel) {
-        innerPanel.style.transition = DRAG_TRANSITION;
-        innerPanel.style.transform = 'scale(1)';
-        innerPanel.style.boxShadow = IDLE_SHADOW;
-      }
-      panel.style.cursor = '';
-      document.body.style.cursor = '';
-    };
-
-    const handleMouseMove = (moveEvent: MouseEvent) => {
-      const targetViewportX = moveEvent.clientX - grabOffsetX;
-      const targetViewportY = moveEvent.clientY - grabOffsetY;
-      const viewportDeltaX = targetViewportX - startRectLeft;
-      const viewportDeltaY = targetViewportY - startRectTop;
-      const cssDeltaX = viewportDeltaX / scale;
-      const cssDeltaY = viewportDeltaY / scale;
-
-      if (!hasMoved && (Math.abs(cssDeltaX) > 2 || Math.abs(cssDeltaY) > 2)) {
-        hasMoved = true;
-        applyDragStyle();
-      }
-
-      if (hasMoved) {
-        const currentRect = panel.getBoundingClientRect();
-        const panelHeight = currentRect.height / scale;
-        const panelWidth = currentRect.width / scale;
-        const bounds = getViewportBounds(scale, panelWidth, panelHeight);
-
-        finalX = Math.max(bounds.minX, Math.min(bounds.maxX, startCssX + cssDeltaX));
-        finalY = Math.max(bounds.minY, Math.min(bounds.maxY, startCssY + cssDeltaY));
-        panel.style.left = finalX + 'px';
-        panel.style.top = finalY + 'px';
-        onPositionChange?.(finalX, finalY);
-
-        const now = performance.now();
-        velocitySamplesRef.current.push({ x: finalX, y: finalY, t: now });
-
-        if (velocitySamplesRef.current.length > config.velocitySampleCount) {
-          velocitySamplesRef.current.shift();
-        }
-      }
-    };
-
-    const handleMouseUp = () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-
-      removeDragStyle();
-
-      if (hasMoved) {
-        setIsDragging(true);
-        setTimeout(() => setIsDragging(false), 50);
-
-        const velocity = calculateVelocityFromSamples();
-        const clamped = clampVelocity(velocity.x, velocity.y);
-        const speed = Math.sqrt(clamped.vx * clamped.vx + clamped.vy * clamped.vy);
-
-        if (speed > config.momentumThreshold) {
-          const currentRect = panel.getBoundingClientRect();
-          const panelHeight = currentRect.height / scale;
-          const panelWidth = currentRect.width / scale;
-          animateMomentum(finalX, finalY, clamped.vx, clamped.vy, scale, panelWidth, panelHeight);
-        } else {
-          setPosition({ x: finalX, y: finalY });
-        }
-      }
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-  };
-
-  // Handle touch start (mobile support)
-  const handleTouchStart = (e: React.TouchEvent) => {
-    const target = e.target as HTMLElement;
-    if (target.closest('[data-no-drag]')) return;
-
-    const panel = panelRef.current;
-    if (!panel) return;
-
-    const touch = e.touches[0];
-
-    const wasAnimating = animationFrameRef.current !== null;
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-      isAnimatingRef.current = false;
-    }
-
-    const innerPanel = panel.querySelector('[data-panel-inner]') as HTMLElement;
-    const rect = panel.getBoundingClientRect();
-    const scale = rect.width / config.panelWidth;
-
-    let startCssX: number;
-    let startCssY: number;
-    if (wasAnimating) {
-      startCssX = parseFloat(panel.style.left) || position.x;
-      startCssY = parseFloat(panel.style.top) || position.y;
-      setPosition({ x: startCssX, y: startCssY });
-    } else {
-      startCssX = position.x;
-      startCssY = position.y;
-    }
-
-    const grabOffsetX = touch.clientX - rect.left;
-    const grabOffsetY = touch.clientY - rect.top;
-    const startRectLeft = rect.left;
-    const startRectTop = rect.top;
-
-    let hasMoved = false;
-    let finalX = startCssX;
-    let finalY = startCssY;
-
-    velocitySamplesRef.current = [{ x: startCssX, y: startCssY, t: performance.now() }];
-
-    const applyDragStyle = () => {
-      if (innerPanel) {
-        innerPanel.style.transition = DRAG_TRANSITION;
-        innerPanel.style.transform = `scale(${config.dragScale})`;
-        innerPanel.style.boxShadow = DRAG_SHADOW;
-      }
-    };
-
-    const removeDragStyle = () => {
-      if (innerPanel) {
-        innerPanel.style.transition = DRAG_TRANSITION;
-        innerPanel.style.transform = 'scale(1)';
-        innerPanel.style.boxShadow = IDLE_SHADOW;
-      }
-    };
-
-    const handleTouchMove = (moveEvent: TouchEvent) => {
-      moveEvent.preventDefault(); // Prevent scrolling while dragging
-      const moveTouch = moveEvent.touches[0];
-
-      const targetViewportX = moveTouch.clientX - grabOffsetX;
-      const targetViewportY = moveTouch.clientY - grabOffsetY;
-      const viewportDeltaX = targetViewportX - startRectLeft;
-      const viewportDeltaY = targetViewportY - startRectTop;
-      const cssDeltaX = viewportDeltaX / scale;
-      const cssDeltaY = viewportDeltaY / scale;
-
-      if (!hasMoved && (Math.abs(cssDeltaX) > 2 || Math.abs(cssDeltaY) > 2)) {
-        hasMoved = true;
-        applyDragStyle();
-      }
-
-      if (hasMoved) {
-        const currentRect = panel.getBoundingClientRect();
-        const panelHeight = currentRect.height / scale;
-        const panelWidth = currentRect.width / scale;
-        const bounds = getViewportBounds(scale, panelWidth, panelHeight);
-
-        finalX = Math.max(bounds.minX, Math.min(bounds.maxX, startCssX + cssDeltaX));
-        finalY = Math.max(bounds.minY, Math.min(bounds.maxY, startCssY + cssDeltaY));
-        panel.style.left = finalX + 'px';
-        panel.style.top = finalY + 'px';
-        onPositionChange?.(finalX, finalY);
-
-        const now = performance.now();
-        velocitySamplesRef.current.push({ x: finalX, y: finalY, t: now });
-
-        if (velocitySamplesRef.current.length > config.velocitySampleCount) {
-          velocitySamplesRef.current.shift();
-        }
-      }
-    };
-
-    const handleTouchEnd = () => {
-      document.removeEventListener('touchmove', handleTouchMove);
-      document.removeEventListener('touchend', handleTouchEnd);
-
-      removeDragStyle();
-
-      if (hasMoved) {
-        setIsDragging(true);
-        setTimeout(() => setIsDragging(false), 50);
-
-        const velocity = calculateVelocityFromSamples();
-        const clamped = clampVelocity(velocity.x, velocity.y);
-        const speed = Math.sqrt(clamped.vx * clamped.vx + clamped.vy * clamped.vy);
-
-        if (speed > config.momentumThreshold) {
-          const currentRect = panel.getBoundingClientRect();
-          const panelHeight = currentRect.height / scale;
-          const panelWidth = currentRect.width / scale;
-          animateMomentum(finalX, finalY, clamped.vx, clamped.vy, scale, panelWidth, panelHeight);
-        } else {
-          setPosition({ x: finalX, y: finalY });
-        }
-      }
-    };
-
-    document.addEventListener('touchmove', handleTouchMove, { passive: false });
-    document.addEventListener('touchend', handleTouchEnd);
-  };
-
-  // Handle toggle
-  const handleToggle = () => {
-    if (isDragging) return;
-    soundEffects.playClickSound();
-    setIsExpanded(!isExpanded);
-    bounceControls.start({
-      scale: [1, 1.015, 1],
-      transition: { duration: 0.3, ease: 'easeOut' },
-    });
-  };
-
-  // Cleanup
-  useEffect(() => {
-    return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-    };
-  }, []);
-
-  // Calculate heights
-  const activeCount = jobs.filter(j => j.status === 'processing').length;
-  const jobsListHeight = jobs.length > 4 ? (4.5 * JOB_ROW_HEIGHT) + 14 : (jobs.length * JOB_ROW_HEIGHT) + 14;
-  const expandedHeight = HEADER_HEIGHT + jobsListHeight;
-  const currentHeight = isExpanded ? expandedHeight : HEADER_HEIGHT;
-
-  const getHeaderText = () => {
-    if (activeCount > 0) {
-      return `${activeCount} job${activeCount !== 1 ? 's' : ''} processing`;
-    }
-    return `${jobs.length} job${jobs.length !== 1 ? 's' : ''} completed`;
-  };
-
-  return (
-    <motion.div
-      ref={panelRef}
-      onMouseDown={handleMouseDown}
-      onTouchStart={handleTouchStart}
-      initial={{ opacity: 0, scale: 0.95, y: 10 }}
-      animate={{ opacity: 1, scale: 1, y: 0 }}
-      transition={{
-        opacity: { duration: 0.15 },
-        scale: { type: 'spring', stiffness: 400, damping: 25 },
-        y: { type: 'spring', stiffness: 400, damping: 25 },
-      }}
-      style={{
-        position: 'fixed',
-        zIndex: 2147483647,
-        userSelect: 'none',
-        touchAction: 'none',
-        left: position.x,
-        top: position.y,
-        width: config.panelWidth,
-        cursor: 'grab',
-      }}
-    >
-      <motion.div
-        animate={bounceControls}
-        style={{
-          width: '100%',
-          willChange: 'transform',
-          backfaceVisibility: 'hidden',
-          transform: 'translateZ(0)',
-        }}
-      >
-        <motion.div
-          ref={innerPanelRef}
-          data-panel-inner
-          initial={false}
-          animate={{ height: currentHeight }}
-          transition={{
-            height: { type: 'spring', stiffness: 400, damping: 28 },
-          }}
-          style={{
-            borderRadius: 12,
-            border: '1px solid rgba(255, 255, 255, 0.1)',
-            overflow: 'hidden',
-            backgroundColor: '#262626', /* neutral-800 */
-            boxShadow: IDLE_SHADOW,
-          }}
-        >
-          {/* Header */}
-          <button
-            onClick={handleToggle}
-            style={{
-              width: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '0 16px',
-              cursor: 'pointer',
-              transition: 'background-color 0.15s',
-              height: HEADER_HEIGHT,
-              backgroundColor: '#262626', /* neutral-800 */
-              border: 'none',
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(64, 64, 64, 0.3)'; /* neutral-700/30 */ }}
-            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#262626'; /* neutral-800 */ }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              {activeCount > 0 ? (
-                <Loader2 size={15} style={{ color: '#2563eb', animation: 'spin 1s linear infinite' }} />
-              ) : (
-                <CircleCheck size={15} style={{ color: '#4ade80' }} />
-              )}
-              <span style={{ fontSize: 13, fontWeight: 500, color: '#e5e5e5' }}>
-                {getHeaderText()}
-              </span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span
-                data-no-drag
-                style={{
-                  fontSize: 11,
-                  padding: '4px 8px',
-                  borderRadius: 6,
-                  transition: 'all 0.2s',
-                  color: '#737373',
-                  cursor: 'pointer',
-                  opacity: isExpanded ? 1 : 0,
-                  pointerEvents: isExpanded ? 'auto' : 'none',
-                }}
-              >
-                Clear
-              </span>
-              <GripVertical size={14} style={{ color: '#525252' }} />
-              <ChevronUp
-                size={13}
-                style={{
-                  color: '#525252',
-                  transition: 'transform 0.3s ease-out',
-                  transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                }}
-              />
-            </div>
-          </button>
-
-          {/* Jobs List */}
-          <div style={{ position: 'relative' }}>
-            <div
-              style={{
-                height: jobsListHeight,
-                paddingTop: 6,
-                paddingBottom: 8,
-                overflowY: 'auto',
-                scrollbarWidth: 'none',
-                msOverflowStyle: 'none',
-              }}
-            >
-            {jobs.map((job) => (
-              <div
-                key={job.id}
-                style={{
-                  width: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  borderRadius: 5,
-                  cursor: 'pointer',
-                  position: 'relative',
-                  height: JOB_ROW_HEIGHT,
-                  padding: '6px 16px 6px 12px',
-                }}
-              >
-                {/* Thumbnail */}
-                <div
-                  style={{
-                    width: 40,
-                    height: 40,
-                    borderRadius: 8,
-                    flexShrink: 0,
-                    transition: 'all 0.15s',
-                    background: job.gradient,
-                  }}
-                />
-
-                {/* Info */}
-                <div style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <span
-                        style={{
-                          display: 'block',
-                          fontSize: 13,
-                          fontWeight: 500,
-                          color: '#fafafa', /* neutral-50 */
-                          maxWidth: 150,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {job.name}
-                      </span>
-                    </div>
-                    <span
-                      data-no-drag
-                      style={{
-                        opacity: 0,
-                        transition: 'opacity 0.15s',
-                        fontSize: 11,
-                        color: '#737373', /* neutral-500 */
-                        cursor: 'pointer',
-                        flexShrink: 0,
-                      }}
-                    >
-                      Clear
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    {job.status === 'processing' ? (
-                      <span style={{ fontSize: 11, color: '#737373' /* neutral-500 */ }}>
-                        Generating...
-                      </span>
-                    ) : (
-                      <>
-                        <Check size={11} style={{ flexShrink: 0, color: '#737373' /* neutral-500 */ }} />
-                        <span style={{ fontSize: 11, color: '#737373' /* neutral-500 */ }}>
-                          Generated • {job.size}
-                        </span>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-            </div>
-            {/* Bottom gradient mask */}
-            <div
-              style={{
-                position: 'absolute',
-                bottom: 0,
-                left: 0,
-                right: 0,
-                height: 40,
-                background: 'linear-gradient(to top, #262626 0%, transparent 100%)',
-                pointerEvents: 'none',
-              }}
-            />
-          </div>
-        </motion.div>
-      </motion.div>
-    </motion.div>
-  );
-}
-
-// ============================================================================
-// SIMPLE FLOATING PANEL (Spawnable)
+// FLOATING PANEL (Spawnable)
 // ============================================================================
 
 const FLOATING_PANEL_SIZE = { width: 160, height: 160 }; // 4x4 grid units (40px each)
@@ -2305,11 +1542,10 @@ interface CutConnection {
   cutTime: number;
 }
 
-function DotGridCanvas({ panelX, panelY, panelWidth, panelHeight, pulses, mousePos, panels, connections, connectionDrag, sliceTrail, cutConnections, onCutAnimationComplete }: { panelX: number; panelY: number; panelWidth: number; panelHeight: number; pulses: PulseEvent[]; mousePos: { x: number; y: number } | null; panels: FloatingPanelData[]; connections: PanelConnection[]; connectionDrag: ConnectionDrag | null; sliceTrail: SlicePoint[]; cutConnections: CutConnection[]; onCutAnimationComplete: (id: string) => void }) {
+function DotGridCanvas({ pulses, mousePos, panels, connections, connectionDrag, sliceTrail, cutConnections, onCutAnimationComplete }: { pulses: PulseEvent[]; mousePos: { x: number; y: number } | null; panels: FloatingPanelData[]; connections: PanelConnection[]; connectionDrag: ConnectionDrag | null; sliceTrail: SlicePoint[]; cutConnections: CutConnection[]; onCutAnimationComplete: (id: string) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number | null>(null);
   const dotsRef = useRef<Map<string, { x: number; y: number; vx: number; vy: number; size: number; targetSize: number; brightness: number }>>(new Map());
-  const lastPanelRef = useRef({ x: panelX, y: panelY, width: panelWidth, height: panelHeight });
   const pulsesRef = useRef<PulseEvent[]>(pulses);
   const mousePosRef = useRef<{ x: number; y: number } | null>(mousePos);
   const panelsRef = useRef<FloatingPanelData[]>(panels);
@@ -2340,7 +1576,6 @@ function DotGridCanvas({ panelX, panelY, panelWidth, panelHeight, pulses, mouseP
     const pushStrength = 25;
     const springStiffness = 0.08;
     const damping = 0.75;
-    const parallaxFactor = 0.08;
 
     // Triangle particle settings
     const particleCount = 12; // Triangles per explosion
@@ -2812,17 +2047,6 @@ function DotGridCanvas({ panelX, panelY, panelWidth, panelHeight, pulses, mouseP
       // Update particles
       updateParticles(deltaTime);
 
-      const currentPanel = lastPanelRef.current;
-
-      // No parallax offset - grid stays centered (main panel removed)
-      const offsetX = 0;
-      const offsetY = 0;
-
-      const panelLeft = currentPanel.x;
-      const panelRight = currentPanel.x + currentPanel.width;
-      const panelTop = currentPanel.y;
-      const panelBottom = currentPanel.y + currentPanel.height;
-
       ctx.clearRect(0, 0, width, height);
 
       // Pulse settings
@@ -2888,17 +2112,11 @@ function DotGridCanvas({ panelX, panelY, panelWidth, panelHeight, pulses, mouseP
         return { x: pushX, y: pushY };
       };
 
-      // Helper to calculate displaced position from ALL panels (main + floating)
+      // Helper to calculate displaced position from all floating panels
       const getDisplacedPosition = (baseX: number, baseY: number) => {
-        // Start with push from main panel
         let totalPushX = 0;
         let totalPushY = 0;
 
-        const mainPush = getPanelPush(baseX, baseY, panelLeft, panelRight, panelTop, panelBottom);
-        totalPushX += mainPush.x;
-        totalPushY += mainPush.y;
-
-        // Add push from all floating panels
         const floatingPanels = panelsRef.current;
         for (const fp of floatingPanels) {
           const fpPush = getPanelPush(baseX, baseY, fp.x, fp.x + fp.width, fp.y, fp.y + fp.height);
@@ -2918,8 +2136,8 @@ function DotGridCanvas({ panelX, panelY, panelWidth, panelHeight, pulses, mouseP
           if (isMainGridPoint) continue;
 
           // Calculate displaced position with parallax
-          const baseX = gx + offsetX;
-          const baseY = gy + offsetY;
+          const baseX = gx;
+          const baseY = gy;
           const pos = getDisplacedPosition(baseX, baseY);
 
           const pulseIntensity = getPulseIntensity(pos.x, pos.y);
@@ -2927,7 +2145,7 @@ function DotGridCanvas({ panelX, panelY, panelWidth, panelHeight, pulses, mouseP
 
           // Draw horizontal line to next dense grid point
           const nextGx = gx + denseGridSize;
-          const nextBaseX = nextGx + offsetX;
+          const nextBaseX = nextGx;
           const nextPosH = getDisplacedPosition(nextBaseX, baseY);
           const nextPulseH = getPulseIntensity(nextPosH.x, nextPosH.y);
           const avgPulseH = (pulseIntensity + nextPulseH) / 2;
@@ -2943,7 +2161,7 @@ function DotGridCanvas({ panelX, panelY, panelWidth, panelHeight, pulses, mouseP
 
           // Draw vertical line to next dense grid point
           const nextGy = gy + denseGridSize;
-          const nextBaseY = nextGy + offsetY;
+          const nextBaseY = nextGy;
           const nextPosV = getDisplacedPosition(baseX, nextBaseY);
           const nextPulseV = getPulseIntensity(nextPosV.x, nextPosV.y);
           const avgPulseV = (pulseIntensity + nextPulseV) / 2;
@@ -2975,12 +2193,6 @@ function DotGridCanvas({ panelX, panelY, panelWidth, panelHeight, pulses, mouseP
         // Calculate opacity based on distance from closest panel
         let lineMinDist = Infinity;
 
-        // Distance to main panel
-        const mainClosestX2 = Math.max(panelLeft, Math.min(dot.x, panelRight));
-        const mainClosestY2 = Math.max(panelTop, Math.min(dot.y, panelBottom));
-        lineMinDist = Math.min(lineMinDist, Math.sqrt((dot.x - mainClosestX2) ** 2 + (dot.y - mainClosestY2) ** 2));
-
-        // Distance to floating panels
         for (const fp of panelsRef.current) {
           const fpClosestX2 = Math.max(fp.x, Math.min(dot.x, fp.x + fp.width));
           const fpClosestY2 = Math.max(fp.y, Math.min(dot.y, fp.y + fp.height));
@@ -3044,27 +2256,14 @@ function DotGridCanvas({ panelX, panelY, panelWidth, panelHeight, pulses, mouseP
         const gx = parseInt(gxStr);
         const gy = parseInt(gyStr);
 
-        // Base position with parallax
-        const baseX = gx + offsetX;
-        const baseY = gy + offsetY;
+        const baseX = gx;
+        const baseY = gy;
 
-        // Calculate target displacement from ALL panels
+        // Calculate target displacement from all panels
         let totalPushX = 0;
         let totalPushY = 0;
         let minDist = Infinity;
 
-        // Push from main panel
-        const mainPush = getPanelPush(baseX, baseY, panelLeft, panelRight, panelTop, panelBottom);
-        totalPushX += mainPush.x;
-        totalPushY += mainPush.y;
-
-        // Calculate distance to main panel for brightness
-        const mainClosestX = Math.max(panelLeft, Math.min(baseX, panelRight));
-        const mainClosestY = Math.max(panelTop, Math.min(baseY, panelBottom));
-        const mainDist = Math.sqrt((baseX - mainClosestX) ** 2 + (baseY - mainClosestY) ** 2);
-        minDist = Math.min(minDist, mainDist);
-
-        // Push from all floating panels
         const floatingPanels = panelsRef.current;
         for (const fp of floatingPanels) {
           const fpPush = getPanelPush(baseX, baseY, fp.x, fp.x + fp.width, fp.y, fp.y + fp.height);
@@ -3612,10 +2811,6 @@ function DotGridCanvas({ panelX, panelY, panelWidth, panelHeight, pulses, mouseP
 
   // Update refs when props change
   useEffect(() => {
-    lastPanelRef.current = { x: panelX, y: panelY, width: panelWidth, height: panelHeight };
-  }, [panelX, panelY, panelWidth, panelHeight]);
-
-  useEffect(() => {
     pulsesRef.current = pulses;
   }, [pulses]);
 
@@ -3663,9 +2858,6 @@ function DotGridCanvas({ panelX, panelY, panelWidth, panelHeight, pulses, mouseP
 export default function GridPlayground() {
   const router = useRouter();
   const [config] = useState<PhysicsConfig>(DEFAULT_CONFIG);
-  // Main panel is off-screen (no longer visible, only floating panels affect grid)
-  const [panelPos] = useState({ x: -9999, y: -9999 });
-  const [panelSize] = useState({ width: 0, height: 0 });
   const [pulses, setPulses] = useState<PulseEvent[]>([]);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
   const [floatingPanels, setFloatingPanels] = useState<FloatingPanelData[]>([]);
@@ -4360,49 +3552,11 @@ export default function GridPlayground() {
       {/* WebGL Noise shader overlay */}
       <NoiseOverlay />
 
-      {/* Global styles */}
-      <style jsx global>{`
-        .scrollbar-none::-webkit-scrollbar {
-          display: none;
-        }
 
-        /* Animated generating text with shimmer */
-        @keyframes textShimmer {
-          0% { opacity: 0.5; }
-          50% { opacity: 1; }
-          100% { opacity: 0.5; }
-        }
-        @keyframes ellipsisFade {
-          0%, 100% { opacity: 0.2; }
-          50% { opacity: 1; }
-        }
-        .animate-generating {
-          animation: textShimmer 2s ease-in-out infinite;
-        }
-        .animate-ellipsis span {
-          display: inline-block;
-        }
-        .animate-ellipsis span:nth-child(1) {
-          animation: ellipsisFade 1.2s ease-in-out infinite;
-          animation-delay: 0s;
-        }
-        .animate-ellipsis span:nth-child(2) {
-          animation: ellipsisFade 1.2s ease-in-out infinite;
-          animation-delay: 0.15s;
-        }
-        .animate-ellipsis span:nth-child(3) {
-          animation: ellipsisFade 1.2s ease-in-out infinite;
-          animation-delay: 0.3s;
-        }
-      `}</style>
 
       {/* Dynamic dot grid */}
       <DotGridCanvas
         key={canvasResetKey}
-        panelX={panelPos.x}
-        panelY={panelPos.y}
-        panelWidth={panelSize.width}
-        panelHeight={panelSize.height}
         pulses={pulses}
         mousePos={mousePos}
         panels={floatingPanels.filter(p => !p.isExiting)}
