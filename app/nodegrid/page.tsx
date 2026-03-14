@@ -2,7 +2,7 @@
 
 import './grid.css';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { router } from 'spiceflow/react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import { soundEffects } from '../../src/utils/SoundEffects';
@@ -149,6 +149,8 @@ function FloatingPanel({
   config,
   isTopPanel,
   isExiting,
+  blockType = 'empty',
+  blockIndex = 0,
   onPositionChange,
   onSizeChange,
   onBounce,
@@ -171,6 +173,8 @@ function FloatingPanel({
   config: PhysicsConfig;
   isTopPanel?: boolean;
   isExiting?: boolean;
+  blockType?: BlockType;
+  blockIndex?: number;
   onPositionChange?: (id: string, x: number, y: number) => void;
   onSizeChange?: (id: string, width: number, height: number) => void;
   onBounce?: (x: number, y: number, intensity: number) => void;
@@ -1189,8 +1193,92 @@ function FloatingPanel({
           boxShadow: IDLE_SHADOW,
           border: `1px solid rgba(255, 255, 255, ${borderOpacity})`,
           transition: 'border-color 0.2s ease',
+          overflow: 'hidden',
         }}
       >
+        {/* Block content */}
+        {blockType === 'text' && (() => {
+          const preset = TEXT_PRESETS[blockIndex % TEXT_PRESETS.length];
+          return (
+            <div style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 4,
+              padding: 12,
+            }}>
+              <span style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: '#fafafa' /* neutral-50 */,
+                letterSpacing: '-0.02em',
+                textAlign: 'center',
+                lineHeight: 1.2,
+                wordBreak: 'break-word',
+              }}>{preset.title}</span>
+              <span style={{
+                fontSize: 11,
+                color: '#737373' /* neutral-500 */,
+                textAlign: 'center',
+              }}>{preset.subtitle}</span>
+            </div>
+          );
+        })()}
+        {blockType === 'color' && (() => {
+          const preset = COLOR_PRESETS[blockIndex % COLOR_PRESETS.length];
+          return (
+            <div style={{
+              position: 'absolute',
+              inset: 0,
+              background: preset.gradient,
+              borderRadius: 11,
+            }}>
+              <span style={{
+                position: 'absolute',
+                bottom: 8,
+                left: 10,
+                fontSize: 10,
+                fontWeight: 500,
+                color: 'rgba(255, 255, 255, 0.5)',
+                fontFamily: 'monospace',
+              }}>{preset.label}</span>
+            </div>
+          );
+        })()}
+        {blockType === 'image' && (() => {
+          const preset = IMAGE_PRESETS[blockIndex % IMAGE_PRESETS.length];
+          return (
+            <div style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+            }}>
+              <span style={{
+                display: 'block',
+                width: 36,
+                height: 36,
+                backgroundImage: 'url(/images/new-robot-logo.svg)',
+                backgroundSize: 'contain',
+                backgroundPosition: 'center',
+                backgroundRepeat: 'no-repeat',
+                opacity: 0.7,
+              }} />
+              <span style={{
+                fontSize: 11,
+                color: '#a3a3a3' /* neutral-400 */,
+                fontWeight: 500,
+              }}>{preset.caption}</span>
+            </div>
+          );
+        })()}
+
         {/* Control icons - top right */}
         <div
           style={{
@@ -1498,6 +1586,36 @@ interface Particle {
   color?: ParticleColor;
 }
 
+// Block types for different panel content
+type BlockType = 'empty' | 'text' | 'color' | 'image';
+
+// Preset data for text blocks
+const TEXT_PRESETS = [
+  { title: 'cosmic-nebula', subtitle: 'Particle system' },
+  { title: 'azure-crystal', subtitle: 'Shader pipeline' },
+  { title: 'midnight-bloom', subtitle: 'Render pass' },
+  { title: 'solar-flare', subtitle: 'Light source' },
+  { title: 'ocean-depths', subtitle: 'Fluid sim' },
+  { title: 'aurora-burst', subtitle: 'Post process' },
+];
+
+// Preset data for color blocks
+const COLOR_PRESETS = [
+  { gradient: 'linear-gradient(135deg, #2563eb 0%, #1e40af 100%)', label: '#2563EB' },
+  { gradient: 'linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%)', label: '#7C3AED' },
+  { gradient: 'linear-gradient(135deg, #059669 0%, #047857 100%)', label: '#059669' },
+  { gradient: 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)', label: '#DC2626' },
+  { gradient: 'linear-gradient(135deg, #d97706 0%, #b45309 100%)', label: '#D97706' },
+  { gradient: 'linear-gradient(135deg, #0891b2 0%, #0e7490 100%)', label: '#0891B2' },
+];
+
+// Preset data for image blocks
+const IMAGE_PRESETS = [
+  { caption: 'robot.co' },
+  { caption: 'node-v1' },
+  { caption: 'grid-core' },
+];
+
 // Floating panel data
 interface FloatingPanelData {
   id: string;
@@ -1506,6 +1624,8 @@ interface FloatingPanelData {
   width: number;
   height: number;
   isExiting?: boolean;
+  blockType: BlockType;
+  blockIndex: number;
 }
 
 // Connection between two panels
@@ -2856,14 +2976,22 @@ function DotGridCanvas({ pulses, mousePos, panels, connections, connectionDrag, 
 }
 
 export default function GridPlayground() {
-  const router = useRouter();
   const [config] = useState<PhysicsConfig>(DEFAULT_CONFIG);
   const [pulses, setPulses] = useState<PulseEvent[]>([]);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
   const [floatingPanels, setFloatingPanels] = useState<FloatingPanelData[]>([]);
   const [canvasResetKey, setCanvasResetKey] = useState(0);
   const panelIdCounter = useRef(1); // Start at 1 since we have a default panel
+  const blockTypeCounter = useRef(0);
   const hasSpawnedDefaultPanel = useRef(false);
+
+  // Cycle through block types and return type + preset index
+  const nextBlockType = useCallback((): { blockType: BlockType; blockIndex: number } => {
+    const types: BlockType[] = ['empty', 'text', 'color', 'image'];
+    const idx = blockTypeCounter.current++;
+    const blockType = types[idx % types.length];
+    return { blockType, blockIndex: idx };
+  }, []);
   const isDraggingRef = useRef(false); // Track if any panel is being dragged
   const sliceDragRef = useRef<{ startX: number; startY: number; lastX: number; lastY: number; isSlicing: boolean } | null>(null);
   const viewportRef = useRef({ width: typeof window !== 'undefined' ? window.innerWidth : 0, height: typeof window !== 'undefined' ? window.innerHeight : 0 });
@@ -2932,12 +3060,15 @@ export default function GridPlayground() {
     const x = (window.innerWidth - FLOATING_PANEL_SIZE.width) / 2;
     const y = (window.innerHeight - FLOATING_PANEL_SIZE.height) / 2;
 
+    const { blockType, blockIndex } = nextBlockType();
     setFloatingPanels([{
       id: 'floating-panel-0',
       x,
       y,
       width: FLOATING_PANEL_SIZE.width,
       height: FLOATING_PANEL_SIZE.height,
+      blockType,
+      blockIndex,
     }]);
   }, []);
 
@@ -3296,6 +3427,7 @@ export default function GridPlayground() {
     const x = e.clientX - FLOATING_PANEL_SIZE.width / 2;
     const y = e.clientY - FLOATING_PANEL_SIZE.height / 2;
     const id = `floating-panel-${panelIdCounter.current++}`;
+    const { blockType, blockIndex } = nextBlockType();
 
     setFloatingPanels(prev => [...prev, {
       id,
@@ -3303,8 +3435,10 @@ export default function GridPlayground() {
       y,
       width: FLOATING_PANEL_SIZE.width,
       height: FLOATING_PANEL_SIZE.height,
+      blockType,
+      blockIndex,
     }]);
-  }, []);
+  }, [nextBlockType]);
 
   // Spawn floating panel on touch (mobile)
   const handleGridTouch = useCallback((e: React.TouchEvent) => {
@@ -3320,6 +3454,7 @@ export default function GridPlayground() {
     const x = touch.clientX - FLOATING_PANEL_SIZE.width / 2;
     const y = touch.clientY - FLOATING_PANEL_SIZE.height / 2;
     const id = `floating-panel-${panelIdCounter.current++}`;
+    const { blockType, blockIndex } = nextBlockType();
 
     setFloatingPanels(prev => [...prev, {
       id,
@@ -3327,8 +3462,10 @@ export default function GridPlayground() {
       y,
       width: FLOATING_PANEL_SIZE.width,
       height: FLOATING_PANEL_SIZE.height,
+      blockType,
+      blockIndex,
     }]);
-  }, []);
+  }, [nextBlockType]);
 
   // Update floating panel position
   const handleFloatingPanelPositionChange = useCallback((id: string, x: number, y: number) => {
@@ -3470,6 +3607,7 @@ export default function GridPlayground() {
       const newPanelId = `floating-panel-${panelIdCounter.current++}`;
       const x = dropX - FLOATING_PANEL_SIZE.width / 2;
       const y = dropY - FLOATING_PANEL_SIZE.height / 2;
+      const { blockType, blockIndex } = nextBlockType();
 
       setFloatingPanels(prev => [...prev, {
         id: newPanelId,
@@ -3477,6 +3615,8 @@ export default function GridPlayground() {
         y,
         width: FLOATING_PANEL_SIZE.width,
         height: FLOATING_PANEL_SIZE.height,
+        blockType,
+        blockIndex,
       }]);
 
       targetId = newPanelId;
@@ -3572,7 +3712,7 @@ export default function GridPlayground() {
         <button
           onClick={() => {
             soundEffects.playQuickStartClick();
-            router.push('/');
+            router.navigate('/');
           }}
           onMouseEnter={() => soundEffects.playHoverSound('logo')}
           className="btn-skin"
@@ -3719,6 +3859,8 @@ export default function GridPlayground() {
           config={config}
           isTopPanel={panel.id === topPanelId}
           isExiting={panel.isExiting}
+          blockType={panel.blockType}
+          blockIndex={panel.blockIndex}
           onPositionChange={handleFloatingPanelPositionChange}
           onSizeChange={handleFloatingPanelSizeChange}
           onBounce={handleBounce}
